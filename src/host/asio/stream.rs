@@ -99,11 +99,20 @@ impl Stream {
     }
 
     pub fn play(&self) -> Result<(), Error> {
+        if let Ok(streams) = self.asio_streams.lock() {
+            eprintln!(
+                "[cpal debug] Stream::play on {:p}: has_input={} has_output={}",
+                self,
+                streams.input.is_some(),
+                streams.output.is_some()
+            );
+        }
         StreamState::Playing.store(&self.state, Ordering::Release);
         Ok(())
     }
 
     pub fn pause(&self) -> Result<(), Error> {
+        eprintln!("[cpal debug] Stream::pause on {:p}", self);
         StreamState::Paused.store(&self.state, Ordering::Release);
         Ok(())
     }
@@ -209,6 +218,7 @@ impl Device {
         let asio_streams = self.asio_streams.clone();
         let mut current_buffer_size = buffer_size as i32;
         let mut last_buffer_index: i32 = -1;
+        let mut debug_calls: u64 = 0;
 
         let time_base = Arc::new(TimeBase::default());
         let time_base_cb = Arc::clone(&time_base);
@@ -225,6 +235,10 @@ impl Device {
             // fire the buffer callback multiple times per buffer cycle with the same buffer
             // index.
             if callback_info.buffer_index == last_buffer_index {
+                eprintln!(
+                    "[cpal debug] input cb: duplicate buffer_index={} skipped",
+                    callback_info.buffer_index
+                );
                 return;
             }
             last_buffer_index = callback_info.buffer_index;
@@ -233,8 +247,26 @@ impl Device {
             let stream_lock = asio_streams.lock().unwrap();
             let asio_stream = match stream_lock.input {
                 Some(ref asio_stream) => asio_stream,
-                None => return,
+                None => {
+                    eprintln!("[cpal debug] input cb: no input AsioStream in shared state");
+                    return;
+                }
             };
+
+            debug_calls += 1;
+            if debug_calls <= 10 || debug_calls % 100 == 0 {
+                let bix = callback_info.buffer_index as usize;
+                let ch0_ptr = asio_stream.buffer_infos.first().map(|entry| {
+                    let entry = *entry;
+                    entry.buffers[bix]
+                });
+                eprintln!(
+                    "[cpal debug] input cb #{debug_calls}: buffer_index={} buffer_size={} n_ch={} ch0_ptr={ch0_ptr:?}",
+                    callback_info.buffer_index,
+                    asio_stream.buffer_size,
+                    asio_stream.buffer_infos.len()
+                );
+            }
 
             // Resize the buffer only when the driver issues a buffer size change request.
             // In normal operation this branch is never taken.
@@ -448,6 +480,7 @@ impl Device {
             return Err(build_stream_err(e));
         }
 
+        eprintln!("[cpal debug] build_input_stream_raw: driver started, input stream ready (Paused)");
         StreamState::Paused.store(&state, Ordering::Release);
         Ok(Stream {
             state,
@@ -547,6 +580,7 @@ impl Device {
         let asio_streams = self.asio_streams.clone();
         let mut current_buffer_size = buffer_size as i32;
         let mut last_buffer_index: i32 = -1;
+        let mut debug_calls: u64 = 0;
 
         let time_base = Arc::new(TimeBase::default());
         let time_base_cb = Arc::clone(&time_base);
@@ -561,6 +595,10 @@ impl Device {
             // fire the buffer callback multiple times per buffer cycle with the same buffer
             // index.
             if callback_info.buffer_index == last_buffer_index {
+                eprintln!(
+                    "[cpal debug] output cb: duplicate buffer_index={} skipped",
+                    callback_info.buffer_index
+                );
                 return;
             }
             last_buffer_index = callback_info.buffer_index;
@@ -569,8 +607,26 @@ impl Device {
             let mut stream_lock = asio_streams.lock().unwrap();
             let asio_stream = match stream_lock.output {
                 Some(ref mut asio_stream) => asio_stream,
-                None => return,
+                None => {
+                    eprintln!("[cpal debug] output cb: no output AsioStream in shared state");
+                    return;
+                }
             };
+
+            debug_calls += 1;
+            if debug_calls <= 10 || debug_calls % 100 == 0 {
+                let bix = callback_info.buffer_index as usize;
+                let ch0_ptr = asio_stream.buffer_infos.first().map(|entry| {
+                    let entry = *entry;
+                    entry.buffers[bix]
+                });
+                eprintln!(
+                    "[cpal debug] output cb #{debug_calls}: buffer_index={} buffer_size={} n_ch={} ch0_ptr={ch0_ptr:?}",
+                    callback_info.buffer_index,
+                    asio_stream.buffer_size,
+                    asio_stream.buffer_infos.len()
+                );
+            }
 
             // Resize the buffer only when the driver issues a buffer size change request.
             // In normal operation this branch is never taken.
@@ -835,6 +891,7 @@ impl Device {
             return Err(build_stream_err(e));
         }
 
+        eprintln!("[cpal debug] build_output_stream_raw: driver started, output stream ready (Paused)");
         StreamState::Paused.store(&state, Ordering::Release);
         Ok(Stream {
             state,
@@ -875,6 +932,10 @@ impl Device {
             Some(ref input) => Ok(input.buffer_size as usize),
             None => {
                 let output = streams.output.take();
+                eprintln!(
+                    "[cpal debug] get_or_create_input_stream: creating input, reusing existing output={}",
+                    output.is_some()
+                );
                 driver
                     .prepare_input_stream(output, num_channels, buffer_size)
                     .map(|new_streams| {
@@ -882,6 +943,21 @@ impl Device {
                             Some(ref inp) => inp.buffer_size as usize,
                             None => unreachable!(),
                         };
+                        let in_ptr = new_streams
+                            .input
+                            .as_ref()
+                            .and_then(|s| s.buffer_infos.first())
+                            .copied()
+                            .map(|b| b.buffers);
+                        let out_ptr = new_streams
+                            .output
+                            .as_ref()
+                            .and_then(|s| s.buffer_infos.first())
+                            .copied()
+                            .map(|b| b.buffers);
+                        eprintln!(
+                            "[cpal debug] get_or_create_input_stream: done, buffer_size={bs} input_ch0_ptr={in_ptr:?} output_ch0_ptr={out_ptr:?}"
+                        );
                         *streams = new_streams;
                         bs
                     })
@@ -917,6 +993,10 @@ impl Device {
             Some(ref output) => Ok(output.buffer_size as usize),
             None => {
                 let input = streams.input.take();
+                eprintln!(
+                    "[cpal debug] get_or_create_output_stream: creating output, reusing existing input={}",
+                    input.is_some()
+                );
                 driver
                     .prepare_output_stream(input, num_channels, buffer_size)
                     .map(|new_streams| {
@@ -924,6 +1004,21 @@ impl Device {
                             Some(ref out) => out.buffer_size as usize,
                             None => unreachable!(),
                         };
+                        let in_ptr = new_streams
+                            .input
+                            .as_ref()
+                            .and_then(|s| s.buffer_infos.first())
+                            .copied()
+                            .map(|b| b.buffers);
+                        let out_ptr = new_streams
+                            .output
+                            .as_ref()
+                            .and_then(|s| s.buffer_infos.first())
+                            .copied()
+                            .map(|b| b.buffers);
+                        eprintln!(
+                            "[cpal debug] get_or_create_output_stream: done, buffer_size={bs} input_ch0_ptr={in_ptr:?} output_ch0_ptr={out_ptr:?}"
+                        );
                         *streams = new_streams;
                         bs
                     })

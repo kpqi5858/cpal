@@ -696,12 +696,23 @@ impl Driver {
             Ordering::Release,
         );
 
+        eprintln!(
+            "[cpal debug] create_buffers: state={:?} num_channels={num_channels} requested_buffer_size={buffer_size}",
+            *state
+        );
+
         // Ensure the driver is in the `Initialized` state.
         if let DriverState::Running = *state {
+            eprintln!("[cpal debug] create_buffers: stopping running stream first");
             state.stop()?;
         }
         if let DriverState::Prepared = *state {
+            eprintln!("[cpal debug] create_buffers: disposing prepared buffers first");
             state.dispose_buffers()?;
+        }
+        for b in buffer_infos.iter() {
+            let (is_input, channel_num, ptrs) = (b.is_input, b.channel_num, b.buffers);
+            eprintln!("[cpal debug] before: is_input={is_input} ch={channel_num} ptrs={ptrs:?}");
         }
         unsafe {
             asio_result!(ai::ASIOCreateBuffers(
@@ -710,6 +721,10 @@ impl Driver {
                 buffer_size,
                 &ASIO_CALLBACKS as *const _ as *mut _,
             ))?;
+        }
+        for b in buffer_infos.iter() {
+            let (is_input, channel_num, ptrs) = (b.is_input, b.channel_num, b.buffers);
+            eprintln!("[cpal debug] after:  is_input={is_input} ch={channel_num} ptrs={ptrs:?}");
         }
         *state = DriverState::Prepared;
 
@@ -846,8 +861,10 @@ impl Driver {
     pub fn start(&self) -> Result<(), AsioError> {
         let mut state = self.inner.lock_state();
         if let DriverState::Running = *state {
+            eprintln!("[cpal debug] Driver::start: already running, no-op");
             return Ok(());
         }
+        eprintln!("[cpal debug] Driver::start: state={:?}, calling ASIOStart", *state);
         unsafe {
             asio_result!(ai::ASIOStart())?;
         }
