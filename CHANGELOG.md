@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **PipeWire**: Set `node.rate` property.
+
 ### Fixed
 
 - **ASIO**: Fix a deadlock when dropping a `Stream` that owns another ASIO `Stream`.

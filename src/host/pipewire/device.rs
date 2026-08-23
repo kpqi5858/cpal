@@ -173,7 +173,11 @@ impl Device {
 
         // Group input and output nodes so PipeWire schedules them in the same quantum,
         // preventing phase drift between simultaneous input/output streams.
-        properties.insert("node.group", format!("cpal-{}", std::process::id()));
+        properties.insert(
+            *pw::keys::NODE_GROUP,
+            format!("cpal-{}", std::process::id()),
+        );
+        properties.insert(*pw::keys::NODE_RATE, format!("1/{}", config.sample_rate));
 
         if let BufferSize::Fixed(buffer_size) = config.buffer_size {
             properties.insert(
